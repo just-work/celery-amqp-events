@@ -15,3 +15,10 @@ def on_number_is_odd(self: Task, number: int):
         # retry task once
         raise ValueError('1')
     print(f"number {number} is odd {self.request.correlation_id}")
+
+
+@app.handler(events.number_is_even.name)
+class NumberEvenHandler(Task):
+    # noinspection PyMethodMayBeStatic
+    def run(self, number: int):
+        print(f"number {number} is even")

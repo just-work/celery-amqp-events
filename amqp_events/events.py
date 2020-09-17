@@ -1,6 +1,7 @@
+from functools import partial
 from typing import Callable
 
-from celery import Celery
+from celery import Celery, Task
 from celery.canvas import Signature
 from celery.result import AsyncResult
 from kombu import Exchange, Queue
@@ -9,6 +10,7 @@ from amqp_events import tasks, defaults
 
 
 class EventsCelery(Celery):
+    task_cls = tasks.EventHandler
 
     def __init__(self, main, *args, **kwargs):
         super().__init__(main, *args, **kwargs)
@@ -21,9 +23,22 @@ class EventsCelery(Celery):
 
         return inner
 
-    def handler(self, name: str, bind: bool = False
-                ) -> Callable[[Callable], Callable]:
-        return self.task(name=name, base=tasks.EventHandler, bind=bind)
+    def handler(self, name: str, bind: bool = False):
+        return partial(self._create_task_from_handler, name=name, bind=bind)
+
+    def _create_task_from_handler(self, fun_or_cls, *, name, bind):
+        if isinstance(fun_or_cls, type) and issubclass(fun_or_cls, Task):
+            if self.Task in fun_or_cls.__bases__:
+                bases = (fun_or_cls,)
+            else:
+                bases = (fun_or_cls, self.Task)
+            attrs = {'name': name}
+            new_name = getattr(fun_or_cls, '__name__')
+            task_class = type(new_name, bases, attrs)
+            self.register_task(task_class)
+        else:
+            self.task(fun_or_cls, name=name, bind=bind)
+        return fun_or_cls
 
     def _generate_task_queues(self, **_):
         queues = self.conf.task_queues
