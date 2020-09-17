@@ -2,6 +2,7 @@ from functools import wraps
 
 from celery.canvas import Signature
 
+from amqp_events import tasks
 from amqp_events.celery import celery
 
 
@@ -26,4 +27,5 @@ def event(name):
 
 
 def handler(name):
-    return celery.task(name=name)
+    return celery.task(name=name, base=tasks.EventHandler)
+
