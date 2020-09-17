@@ -11,9 +11,9 @@ def on_event_occured(value: str):
 
 @app.handler(events.number_is_odd.name, bind=True)
 def on_number_is_odd(self: Task, number: int):
-    if self.request.retries == 0:
+    if self.request.retries < 5:
         # retry task once
-        raise ValueError('1')
+        raise ValueError(number)
     print(f"number {number} is odd {self.request.correlation_id}")
 
 
