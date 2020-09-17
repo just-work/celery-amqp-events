@@ -18,12 +18,10 @@ celery.conf.update(cfg)
 def on_celeryd_init(*, instance: Worker, conf: Settings, **_):
     queues = conf.task_queues
     if not queues:
-        exchange = Exchange(
-            name=conf.task_default_exchange,
-            type=conf.task_default_exchange_type)
-        queue = Queue(
-            name=conf.task_default_queue,
-            exchange=exchange,
-            routing_key=conf.task_default_routing_key)
-        queues.append(queue)
+        queues.extend(config.get_queues_from_tasks(instance.app, conf))
     config.initialize_task_queues(instance.app, queues)
+    pass
+
+@celeryd_after_setup.connect
+def on_celeryd_after_setup(**kwargs):
+    pass
