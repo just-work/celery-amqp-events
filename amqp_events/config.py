@@ -48,8 +48,8 @@ def initialize_task_queues(app: Celery, queues: List[Queue]):
             routing_key=f'{queue.routing_key}.archived',
             exchange=queue.exchange,
             queue_arguments={
-                "x-message-ttl": defaults.ARCHIVED_MESSAGE_TTL * 1000,
-                "x-max-length": defaults.ARCHIVED_QUEUE_LENGTH,
+                "x-message-ttl": defaults.AMQP_EVENTS_ARCHIVED_MESSAGE_TTL,
+                "x-max-length": defaults.AMQP_EVENTS_ARCHIVED_QUEUE_LENGTH,
                 "x-queue-mode": "lazy"
             })
 
@@ -66,7 +66,7 @@ def get_queues_from_tasks(app: Celery, conf: Settings) -> List[Queue]:
         if task.__module__ not in conf.imports:
             continue
         queue = Queue(
-            name=f'{defaults.QUEUE_PREFIX}.{task.name}',
+            name=f'{defaults.AMQP_EVENTS_QUEUE_PREFIX}.{task.name}',
             exchange=exchange,
             routing_key=task.name)
         queues.append(queue)
