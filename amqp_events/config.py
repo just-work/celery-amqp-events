@@ -59,7 +59,7 @@ def get_queues_from_tasks(app: Celery, conf: Settings) -> List[Queue]:
         queue = Queue(
             name=f'{defaults.QUEUE_PREFIX}.{task.name}',
             exchange=exchange,
-            routing_key=conf.task_default_routing_key)
+            routing_key=task.name)
         queues.append(queue)
     return queues
 
@@ -67,7 +67,7 @@ def get_queues_from_tasks(app: Celery, conf: Settings) -> List[Queue]:
 # noinspection PyUnusedLocal
 def route_for_event(name, args, kwargs, options, task=None, **kw):
     return {
-        'routing_key': options['routing_key'],
+        'routing_key': options.get('routing_key', name),
         'exchange': task.app.conf.task_default_exchange,
         'exchange_type': task.app.conf.task_default_exchange_type
     }
