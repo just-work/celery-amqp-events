@@ -6,14 +6,23 @@ from typing import List
 from amqp_events import defaults
 
 AMQP_EVENTS_CONFIG = {
+    # Connections
     'broker_url': 'amqp://guest:guest@localhost:5672/',
     'result_backend': None,
+
+    # Queues and routing
     'task_queues': [],
     'task_default_exchange': 'events',
     'task_default_exchange_type': 'topic',
     'task_default_queue': 'events',
     'task_default_routing_key': '#',
     'task_routes': ['amqp_events.config:route_for_event'],
+
+    # Robustness
+    'task_acks_late': True,
+    'task_reject_on_worker_lost': True,
+
+    # Task discovery
     'imports': [],
 }
 
