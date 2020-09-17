@@ -1,6 +1,7 @@
-from amqp_events.celery import app
+from demo.celery import app
 
 
+# noinspection PyUnusedLocal
 @app.event('demo.first.occured')
 def event_occured(value: str):
     pass

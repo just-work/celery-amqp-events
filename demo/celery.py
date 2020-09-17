@@ -1,7 +1,6 @@
-from os import environ
+from amqp_events.celery import events_app
 
-environ.setdefault('AMQP_EVENTS_CONFIG', 'demo.conf:AMQP_EVENTS_CONFIG')
-
-from amqp_events.celery import app  # noqa
-
-__all__ = ['app']
+app = events_app(
+    'demo_consumer',
+    broker_url='amqp://guest:guest@rabbitmq:5672/',
+    imports=['demo.tasks'])
