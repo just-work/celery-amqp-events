@@ -15,9 +15,10 @@ pip install celery-amqp-events
 Configuration
 -------------
 
-1. Set a "service name" for each service that has event handlers.
-2. Tell celery with `imports` settings where to find event handlers.
-3. Configure broker connection and other celery settings
+1. Pass a unique "service name" to `Celery()` instance for each service that 
+    has event handlers (see `amqp_events.celery:events_app`).
+2. Tell celery with `imports` setting where to find event handlers.
+3. Configure broker connection and other celery settings.
 4. Leave result backend empty - each event may have multiple consumers,
     event result is meaningless in this case.
 > You absolutely need to set separate name for each service that consumes 
@@ -103,6 +104,8 @@ Robustness
 * By default, some fault-tolerance celery settings are enabled:
     * `task_acks_late` will delay task acknowledgement till end of processing
     * `task_reject_on_worker_lost` will prevent `ack` if worker was killed
+    * `confirm_publish` in `broker_transport_options` will block producer till 
+        broker will confirm that it received incoming message.
 
 Related projects
 ----------------
