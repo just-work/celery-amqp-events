@@ -7,6 +7,19 @@ from kombu import Exchange, Queue, binding
 
 from amqp_events import config, task, defaults
 
+# queue arguments
+X_QUEUE_MODE = "x-queue-mode"
+X_MAX_LENGTH = "x-max-length"
+X_MESSAGE_TTL = "x-message-ttl"
+X_DEAD_LETTER_EXCHANGE = "x-dead-letter-exchange"
+
+# exchange types
+EXCHANGE_TYPE_FANOUT = 'fanout'
+EXCHANGE_TYPE_TOPIC = 'topic'
+
+# on-disk only queue mode
+QUEUE_MODE_LAZY = "lazy"
+
 AnyFunc = Callable[..., Any]
 F = TypeVar('F')
 # noinspection PyTypeChecker
@@ -72,6 +85,26 @@ class EventsCelery(Celery):
                 fun_or_cls, name=name, bind=bind)
 
         return inner
+
+    @property
+    def recover_exchange_name(self) -> str:
+        """ Name of recover exchange name."""
+        return f'{self.main}.recover'
+
+    @property
+    def retry_exchange_name(self) -> str:
+        """
+        Name of DLX for event queues and retry exchange prefix.
+        Also used as retry queues prefix.
+        """
+        return f"{self.main}.retry"
+
+    @property
+    def archived_exchange_name(self) -> str:
+        """
+        Name of exchange and queue for archived events.
+        """
+        return f'{self.main}.archived'
 
     def _create_task_from_handler(self, fun_or_cls: T, *, name: str,
                                   bind: bool) -> T:
@@ -142,9 +175,7 @@ class EventsCelery(Celery):
         queues = self.conf.task_queues or []
         if queues:
             return
-        channel = self.broker_connection().default_channel
         exchange = Exchange(
-            channel=channel,
             name=self.conf.task_default_exchange,
             type=self.conf.task_default_exchange_type)
 
@@ -152,9 +183,8 @@ class EventsCelery(Celery):
             # Bind same routing key to "recover" exchange if broker-side delays
             # are enabled
             recover = Exchange(
-                channel=channel,
-                name=f'{self.main}.recover',
-                type='topic')
+                name=self.recover_exchange_name,
+                type=EXCHANGE_TYPE_TOPIC)
         else:
             recover = None
 
@@ -166,7 +196,7 @@ class EventsCelery(Celery):
                 name=f'{self.main}.{name}',
                 bindings=bindings,
                 queue_arguments={
-                    "x-dead-letter-exchange": f"{self.main}.retry",
+                    X_DEAD_LETTER_EXCHANGE: self.retry_exchange_name,
                 }
             )
             queues.append(queue)
@@ -196,15 +226,17 @@ class EventsCelery(Celery):
         """
         channel = self.broker_connection().default_channel
         for retry in range(defaults.AMQP_EVENTS_MAX_RETRIES):
-            suffix = f'retry.{retry}' if retry else 'retry'
-            name = f'{self.main}.{suffix}'
-            retry_exchange = Exchange(name=name, type='fanout')
+            if retry:
+                name = f'{self.retry_exchange_name}.{retry}'
+            else:
+                name = self.retry_exchange_name
+            retry_exchange = Exchange(name=name, type=EXCHANGE_TYPE_FANOUT)
             retry_queue = Queue(
                 name=name,
                 exchange=retry_exchange,
                 queue_arguments={
-                    "x-message-ttl": 2 ** retry * 1000,  # ms
-                    "x-dead-letter-exchange": f"{self.main}.recover",
+                    X_MESSAGE_TTL: 2 ** retry * 1000,  # ms
+                    X_DEAD_LETTER_EXCHANGE: self.recover_exchange_name,
                 }
             )
             retry_queue.declare(channel=channel)
@@ -219,16 +251,16 @@ class EventsCelery(Celery):
         if not (max_ttl or max_len):
             # archived exchange is disabled
             return
-        name = f'{self.main}.archived'
-        archived = Exchange(name=name, type='fanout')
+        archived = Exchange(name=self.archived_exchange_name,
+                            type=EXCHANGE_TYPE_FANOUT)
         channel = self.broker_connection().default_channel
         archived_queue = Queue(
-            name=name,
+            name=self.archived_exchange_name,
             exchange=archived,
             queue_arguments={
-                "x-message-ttl": max_ttl,
-                "x-max-length": max_len,
-                "x-queue-mode": "lazy"
+                X_MESSAGE_TTL: max_ttl,
+                X_MAX_LENGTH: max_len,
+                X_QUEUE_MODE: QUEUE_MODE_LAZY
             })
         archived_queue.declare(channel=channel)
         archived_queue.maybe_bind(channel=channel)

@@ -1,7 +1,6 @@
 from datetime import datetime
 from typing import Any, Tuple, Dict, Optional, Union
 
-from billiard.einfo import ExceptionInfo
 from celery import Task
 
 from amqp_events import defaults
@@ -12,6 +11,7 @@ Kwargs = Dict[str, Any]
 
 class EventHandler(Task):
     max_retries = defaults.AMQP_EVENTS_MAX_RETRIES
+    autoretry_for = (Exception,)
 
     # As retry queue handles message delay by itself, we don't need default
     # retry countdown.
@@ -19,10 +19,6 @@ class EventHandler(Task):
 
     def run(self, *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError
-
-    def on_failure(self, exc: Exception, task_id: str, args: Args,
-                   kwargs: Kwargs, einfo: ExceptionInfo) -> None:
-        self.retry(exc=exc, throw=False)
 
     def retry(self,
               args: Optional[Args] = None,
@@ -48,12 +44,17 @@ class EventHandler(Task):
             # exponential event count growth when two different consumers retry
             # same task with same shared routing key.
             # Because of this we always retry message to separate retry queue
-            # via separate fanout exchange with vadying message-ttl
+            # via separate fanout exchange with varying message-ttl.
+            # We choose concrete exchange (and corresponding delay time) based
+            # on retries count (delay = 2s ** self.request.retries).
             if self.request.retries == 0:
                 name = f'{self.app.main}.retry'
             else:
                 name = f'{self.app.main}.retry.{self.request.retries}'
             options['exchange'] = name
+            # Set countdown for logging purposes, because delay is controlled
+            # on the broker side.
+            countdown = 2 ** self.request.retries
 
         return super().retry(args, kwargs, exc, throw, eta, countdown,
                              max_retries, **options)
