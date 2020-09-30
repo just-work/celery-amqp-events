@@ -4,7 +4,7 @@ from unittest import TestCase, mock
 from celery.app.task import Task
 from kombu import Queue, Exchange
 
-from amqp_events.events import EventsCelery
+from amqp_events.celery import EventsCelery
 
 
 class EventsCeleryTestCase(TestCase):
