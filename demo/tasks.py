@@ -1,16 +1,15 @@
-from celery import Task
-
+from celery.app.task import Task
 from demo import events
 from demo.celery import app
 
 
 @events.event_occured.handler
-def on_event_occured(value: str):
+def on_event_occured(value: str) -> None:
     print(f"event occured: {value}")
 
 
 @app.handler(events.number_is_odd.name, bind=True)
-def on_number_is_odd(self: Task, number: int):
+def on_number_is_odd(self: Task, number: int) -> None:
     if self.request.retries < 5:
         # retry task once
         raise ValueError(number)
@@ -20,5 +19,5 @@ def on_number_is_odd(self: Task, number: int):
 @app.handler(events.number_is_even.name)
 class NumberEvenHandler(Task):
     # noinspection PyMethodMayBeStatic
-    def run(self, number: int):
+    def run(self, number: int) -> None:
         print(f"number {number} is even")
