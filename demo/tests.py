@@ -138,6 +138,7 @@ class EventsCeleryTestCase(TestCase):
         """
         Every event has only one event handler.
         """
-        self.app.handler(self.event_name)(self.my_handler_func)
+        decorator = self.app.handler(self.event_name)
+        decorator(self.my_handler_func)
 
-        self.assertRaises(RuntimeError, self.app.handler, self.event_name)
+        self.assertRaises(RuntimeError, decorator, mock.MagicMock())

@@ -1,8 +1,15 @@
+from datetime import datetime
+from typing import Any, Tuple, Dict, Optional, Union
+
+from billiard.einfo import ExceptionInfo
 from celery import Task
 
 from celery.exceptions import Reject
 
 from amqp_events import defaults
+
+Args = Tuple[Any, ...]
+Kwargs = Dict[str, Any]
 
 
 class EventHandler(Task):
@@ -12,14 +19,22 @@ class EventHandler(Task):
     # retry countdown.
     default_retry_delay = 0
 
-    def run(self, *args, **kwargs):
+    def run(self, *args: Any, **kwargs: Any) -> None:
         raise NotImplementedError
 
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
+    def on_failure(self, exc: Exception, task_id: str, args: Args,
+                   kwargs: Kwargs, einfo: ExceptionInfo) -> None:
         self.retry(exc=exc, throw=False)
 
-    def retry(self, args=None, kwargs=None, exc=None, throw=True, eta=None,
-              countdown=None, max_retries=None, **options):
+    def retry(self,
+              args: Optional[Args] = None,
+              kwargs: Optional[Kwargs] = None,
+              exc: Optional[Exception] = None,
+              throw: bool = True,
+              eta: Optional[datetime] = None,
+              countdown: Union[None, int, float] = None,
+              max_retries: Optional[int] = None,
+              **options: Any) -> None:
         max_retries = self.max_retries if max_retries is None else max_retries
 
         if max_retries is not None and self.request.retries >= max_retries:
