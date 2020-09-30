@@ -1,5 +1,5 @@
 from functools import partial
-from typing import Callable
+from typing import Callable, Any, Set, TypeVar, Tuple, Type, Dict
 
 from celery import Celery, Task
 from celery.canvas import Signature
@@ -8,28 +8,40 @@ from kombu import Exchange, Queue
 
 from amqp_events import tasks, defaults
 
+T = TypeVar('T')
+
 
 class EventsCelery(Celery):
     task_cls = tasks.EventHandler
 
-    def __init__(self, main, *args, **kwargs):
+    def __init__(self, main: str, *args: Any, **kwargs: Any) -> None:
         super().__init__(main, *args, **kwargs)
         self.on_after_finalize.connect(self._generate_task_queues)
         self.on_after_finalize.connect(self._register_retry_queues)
+        self._handlers: Set[str] = set()
 
     def event(self, name: str) -> Callable[[Callable], "Event"]:
-        def inner(func):
+        def inner(func: Callable) -> Event:
             return Event(self, name, func)
 
         return inner
 
-    def handler(self, name: str, bind: bool = False):
-        return partial(self._create_task_from_handler, name=name, bind=bind)
+    def handler(self, name: str, bind: bool = False) -> Callable[[T], T]:
 
-    def _create_task_from_handler(self, fun_or_cls, *, name, bind):
+        def inner(fun_or_cls: T) -> T:
+            if name in self._handlers:
+                raise RuntimeError("event handler already registered")
+            self._handlers.add(name)
+            return self._create_task_from_handler(
+                fun_or_cls, name=name, bind=bind)
+
+        return inner
+
+    def _create_task_from_handler(self, fun_or_cls: T, *, name: str,
+                                  bind: bool) -> T:
         if isinstance(fun_or_cls, type) and issubclass(fun_or_cls, Task):
             if self.Task in fun_or_cls.__bases__:
-                bases = (fun_or_cls,)
+                bases: Tuple[Type[Task], ...] = (fun_or_cls,)
             else:
                 bases = (fun_or_cls, self.Task)
             attrs = {'name': name}
@@ -40,23 +52,22 @@ class EventsCelery(Celery):
             self.task(fun_or_cls, name=name, bind=bind)
         return fun_or_cls
 
-    def _generate_task_queues(self, **_):
-        queues = self.conf.task_queues
+    def _generate_task_queues(self, **_: Any) -> None:
+        queues = self.conf.task_queues or []
         if queues:
             return
         exchange = Exchange(
             name=self.conf.task_default_exchange,
             type=self.conf.task_default_exchange_type)
-        for name, task in self._tasks.items():
-            if task.__module__.startswith('celery.'):
-                continue
+        for name in self._handlers:
             queue = Queue(
-                name=f'{self.main}.{task.name}',
+                name=f'{self.main}.{name}',
                 exchange=exchange,
-                routing_key=task.name)
+                routing_key=name)
             queues.append(queue)
+        self.conf.task_queues = queues
 
-    def _register_retry_queues(self, **_):
+    def _register_retry_queues(self, **_: Any) -> None:
         channel = self.broker_connection().default_channel
         for queue in self.conf.task_queues:
             retry_queue = Queue(
@@ -92,7 +103,7 @@ class Event:
         self.name = name
         self.func = func
 
-    def __call__(self, *args, **kwargs) -> str:
+    def __call__(self, *args: Any, **kwargs: Any) -> str:
         self.func(*args, **kwargs)
         s = self.make_signature(args, kwargs)
         result: AsyncResult = s.apply_async()
@@ -101,7 +112,8 @@ class Event:
     def handler(self, func: Callable) -> Callable:
         return self.app.handler(self.name)(func)
 
-    def make_signature(self, args, kwargs):
+    def make_signature(self, args: Tuple[Any, ...], kwargs: Dict[str, Any]
+                       ) -> Signature:
         return Signature(
             args=args,
             kwargs=kwargs,

@@ -1,6 +1,9 @@
 """ Default configuration for EventsCelery."""
+from typing import Any, Dict, Tuple, Optional
 
-AMQP_EVENTS_CONFIG = {
+from celery.app.task import Task
+
+AMQP_EVENTS_CONFIG: Dict[str, Any] = {
     # Connections
     'broker_url': 'amqp://guest:guest@localhost:5672/',
     'result_backend': None,
@@ -21,11 +24,16 @@ AMQP_EVENTS_CONFIG = {
 
 
 # noinspection PyUnusedLocal
-def route_for_event(name, args, kwargs, options, task=None, **kw):
+def route_for_event(name: str,
+                    args: Tuple[Any, ...],
+                    kwargs: Dict[str, Any],
+                    options: Dict[str, Any],
+                    task: Optional[Task] = None,
+                    **kw: Any) -> Dict[str, str]:
     # Without explicit routing function Celery tries to declare and bind
     # default queue while sending events, which leads to unexpected behavior.
     return {
         'routing_key': options.get('routing_key', name),
-        'exchange': task.app.conf.task_default_exchange,
-        'exchange_type': task.app.conf.task_default_exchange_type
+        # 'exchange': task.app.conf.task_default_exchange,
+        # 'exchange_type': task.app.conf.task_default_exchange_type
     }

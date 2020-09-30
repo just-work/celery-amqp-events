@@ -1,1 +1,6 @@
 .idea/
+celery_amqp_events.egg-info/
+.coverage
+.dmypy.json
+*.tar.gz
+*.whl
