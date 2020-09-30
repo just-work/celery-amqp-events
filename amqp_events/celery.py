@@ -3,7 +3,7 @@ from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple
 from celery import Celery, Task
 from celery.canvas import Signature
 from celery.result import AsyncResult
-from kombu import Exchange, Queue
+from kombu import Exchange, Queue, binding
 
 from amqp_events import config, task, defaults
 
@@ -35,8 +35,9 @@ class EventsCelery(Celery):
 
     def __init__(self, main: str, *args: Any, **kwargs: Any) -> None:
         super().__init__(main, *args, **kwargs)
-        self.on_after_finalize.connect(self._generate_task_queues)
         self.on_after_finalize.connect(self._register_retry_queues)
+        self.on_after_finalize.connect(self._register_archived_queue)
+        self.on_after_finalize.connect(self._generate_task_queues)
         self._handlers: Set[str] = set()
 
     def event(self, name: str) -> Callable[[T], EventProtocol[T]]:
@@ -112,52 +113,125 @@ class EventsCelery(Celery):
     def _generate_task_queues(self, **_: Any) -> None:
         """
         Create a list of queues for celery worker from registered handlers list.
+
+        Each handler has it's own queue named as `service_name.event_name`.
+        This queue is bound to `events` exchange with event routing key and
+        receives initial events from it. If broker-side retry is enabled, queue
+        is also bound to `recover` exchange with same routing key, from which
+        it receives retried events.
+        Also `recover` defines `dead-letter-exchange` which re-routes rejected
+        messages to `retry` queue with 1 second duration (in case of failed
+        republish).
+
+        Last thing is `archived` echange/queue pair. `archived` queue has
+        limited message ttl and queue-length. When a message exceeds max
+        retries it is republished to `archived` queue.
+
+        `events` -> (event routing key) -> `demo.my_event` -> Celery worker
+            | (message is rejected by worker and message rerouted via DLX)
+            V
+        `demo:retry` -> `demo:retry` -> ... 1 second elapsed
+            | (message ttl expires )
+            V
+        `recover` -> (routing key) -> `demo.my_event_queue` - > Celery worker
+            | (MaxTaskRetriesExceeded)
+            V
+        `archived` -> `demo.archived`
+
         """
         queues = self.conf.task_queues or []
         if queues:
             return
+        channel = self.broker_connection().default_channel
         exchange = Exchange(
+            channel=channel,
             name=self.conf.task_default_exchange,
             type=self.conf.task_default_exchange_type)
+
+        if defaults.AMQP_EVENTS_MAX_RETRIES > 0:
+            # Bind same routing key to "recover" exchange if broker-side delays
+            # are enabled
+            recover = Exchange(
+                channel=channel,
+                name=f'{self.main}.recover',
+                type='topic')
+        else:
+            recover = None
+
         for name in self._handlers:
+            bindings = [binding(exchange=exchange, routing_key=name)]
+            if recover:
+                bindings.append(binding(exchange=recover, routing_key=name))
             queue = Queue(
                 name=f'{self.main}.{name}',
-                exchange=exchange,
-                routing_key=name)
+                bindings=bindings,
+                queue_arguments={
+                    "x-dead-letter-exchange": f"{self.main}.retry",
+                }
+            )
             queues.append(queue)
         self.conf.task_queues = queues
 
     def _register_retry_queues(self, **_: Any) -> None:
         """
         Initializes a set of AMQP primitives to implement broker-based delays.
+
+        Declares an exchange/queue pair for each delay stage defined by
+        `amqp_events.defaults:AMQP_EVENTS_MAX_RETRIES`.
+        Each exchange has a single bound queue; when task needs to be delayed,
+        it's re-published to new exchange preserving initial routing_key.
+        A queue for each exchange has `message-ttl` set to a power of 2. After
+        message is expired, it is re-routed by broker to `dead-letter-exchange`
+        named `recover`. All queues defined for event handlers are also bound to
+        this exchange with same routing key, thus each message after a retry
+        appears in same incoming queue.
+
+        `events` -> `demo.my_event_queue` -> Celery worker (retry)
+            | (publishes new message on retry)
+            V
+        `demo:retry.N` -> `demo:retry.N`
+            | (message ttl expires )
+            V
+        `recover` -> (routing key) -> `demo.my_event_queue` - > Celery worker
         """
         channel = self.broker_connection().default_channel
-        for queue in self.conf.task_queues:
+        for retry in range(defaults.AMQP_EVENTS_MAX_RETRIES):
+            suffix = f'retry.{retry}' if retry else 'retry'
+            name = f'{self.main}.{suffix}'
+            retry_exchange = Exchange(name=name, type='fanout')
             retry_queue = Queue(
-                name=f'{queue.name}.retry',
-                routing_key=f'{queue.routing_key}.retry',
-                exchange=queue.exchange,
+                name=name,
+                exchange=retry_exchange,
                 queue_arguments={
-                    "x-dead-letter-exchange": "",
-                    "x-dead-letter-routing-key": queue.name
+                    "x-message-ttl": 2 ** retry * 1000,  # ms
+                    "x-dead-letter-exchange": f"{self.main}.recover",
                 }
             )
-
             retry_queue.declare(channel=channel)
             retry_queue.maybe_bind(channel=channel)
 
-            archived_queue = Queue(
-                name=f'{queue.name}.archived',
-                routing_key=f'{queue.routing_key}.archived',
-                exchange=queue.exchange,
-                queue_arguments={
-                    "x-message-ttl": defaults.AMQP_EVENTS_ARCHIVED_MESSAGE_TTL,
-                    "x-max-length": defaults.AMQP_EVENTS_ARCHIVED_QUEUE_LENGTH,
-                    "x-queue-mode": "lazy"
-                })
-
-            archived_queue.declare(channel=channel)
-            archived_queue.maybe_bind(channel=channel)
+    def _register_archived_queue(self, **_) -> None:
+        """
+        Registers an exchange and a queue for archived messages.
+        """
+        max_ttl = defaults.AMQP_EVENTS_ARCHIVED_MESSAGE_TTL
+        max_len = defaults.AMQP_EVENTS_ARCHIVED_QUEUE_LENGTH
+        if not (max_ttl or max_len):
+            # archived exchange is disabled
+            return
+        name = f'{self.main}.archived'
+        archived = Exchange(name=name, type='fanout')
+        channel = self.broker_connection().default_channel
+        archived_queue = Queue(
+            name=name,
+            exchange=archived,
+            queue_arguments={
+                "x-message-ttl": max_ttl,
+                "x-max-length": max_len,
+                "x-queue-mode": "lazy"
+            })
+        archived_queue.declare(channel=channel)
+        archived_queue.maybe_bind(channel=channel)
 
 
 class Event:

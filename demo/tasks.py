@@ -1,4 +1,6 @@
 from celery.app.task import Task
+from celery.exceptions import Reject
+
 from demo import events
 from demo.celery import app
 
@@ -6,6 +8,8 @@ from demo.celery import app
 @events.event_occured.handler
 def on_event_occured(value: str) -> None:
     print(f"event occured: {value}")
+    if value == 'reject':
+        raise ValueError('reject')
 
 
 @app.handler(events.number_is_odd.name, bind=True)

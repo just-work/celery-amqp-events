@@ -4,8 +4,6 @@ from typing import Any, Tuple, Dict, Optional, Union
 from billiard.einfo import ExceptionInfo
 from celery import Task
 
-from celery.exceptions import Reject
-
 from amqp_events import defaults
 
 Args = Tuple[Any, ...]
@@ -40,7 +38,7 @@ class EventHandler(Task):
         if max_retries is not None and self.request.retries >= max_retries:
             # When no attempts left we retry message to separate archive queue
             # where it can be found for some time before expiration.
-            options['routing_key'] = f'{self.name}.archived'
+            options['exchange'] = f'{self.app.main}.archived'
 
             # One more attempt to move message to archive queue
             max_retries += 1
@@ -49,17 +47,13 @@ class EventHandler(Task):
             # As celery uses delivery_info for retrying tasks, this can lead to
             # exponential event count growth when two different consumers retry
             # same task with same shared routing key.
-            # Because of this we always retry message to separate retry queue.
-            options['routing_key'] = f'{self.name}.retry'
+            # Because of this we always retry message to separate retry queue
+            # via separate fanout exchange with vadying message-ttl
+            if self.request.retries == 0:
+                name = f'{self.app.main}.retry'
+            else:
+                name = f'{self.app.main}.retry.{self.request.retries}'
+            options['exchange'] = name
 
-            # Use message expiration to delay processing via DLX
-            options['expiration'] = 2 ** self.request.retries
-
-        try:
-            return super().retry(args, kwargs, exc, throw, eta, countdown,
-                                 max_retries, **options)
-        except Reject as reject:
-            # If any error happens when publish retried message, we want to
-            # requeue current task back to incoming queue.
-            reject.requeue = True
-            raise
+        return super().retry(args, kwargs, exc, throw, eta, countdown,
+                             max_retries, **options)
