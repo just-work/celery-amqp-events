@@ -1,3 +1,4 @@
+from collections import defaultdict
 from functools import partial
 from typing import Callable
 
@@ -16,6 +17,7 @@ class EventsCelery(Celery):
         super().__init__(main, *args, **kwargs)
         self.on_after_finalize.connect(self._generate_task_queues)
         self.on_after_finalize.connect(self._register_retry_queues)
+        self._handlers = set()
 
     def event(self, name: str) -> Callable[[Callable], "Event"]:
         def inner(func):
@@ -24,6 +26,9 @@ class EventsCelery(Celery):
         return inner
 
     def handler(self, name: str, bind: bool = False):
+        if name in self._handlers:
+            raise RuntimeError("event handler already registered")
+        self._handlers.add(name)
         return partial(self._create_task_from_handler, name=name, bind=bind)
 
     def _create_task_from_handler(self, fun_or_cls, *, name, bind):
@@ -41,20 +46,19 @@ class EventsCelery(Celery):
         return fun_or_cls
 
     def _generate_task_queues(self, **_):
-        queues = self.conf.task_queues
+        queues = self.conf.task_queues or []
         if queues:
             return
         exchange = Exchange(
             name=self.conf.task_default_exchange,
             type=self.conf.task_default_exchange_type)
-        for name, task in self._tasks.items():
-            if task.__module__.startswith('celery.'):
-                continue
+        for name in self._handlers:
             queue = Queue(
-                name=f'{self.main}.{task.name}',
+                name=f'{self.main}.{name}',
                 exchange=exchange,
-                routing_key=task.name)
+                routing_key=name)
             queues.append(queue)
+        self.conf.task_queues = queues
 
     def _register_retry_queues(self, **_):
         channel = self.broker_connection().default_channel
