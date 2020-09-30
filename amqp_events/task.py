@@ -10,6 +10,8 @@ Kwargs = Dict[str, Any]
 
 
 class EventHandler(Task):
+    # noinspection PyUnresolvedReferences
+    app: 'amqp_events.celery.EventsCelery'
     max_retries = defaults.AMQP_EVENTS_MAX_RETRIES
     autoretry_for = (Exception,)
 
@@ -34,7 +36,7 @@ class EventHandler(Task):
         if max_retries is not None and self.request.retries >= max_retries:
             # When no attempts left we retry message to separate archive queue
             # where it can be found for some time before expiration.
-            options['exchange'] = f'{self.app.main}.archived'
+            options['exchange'] = self.app.archived_exchange_name
 
             # One more attempt to move message to archive queue
             max_retries += 1
@@ -47,10 +49,7 @@ class EventHandler(Task):
             # via separate fanout exchange with varying message-ttl.
             # We choose concrete exchange (and corresponding delay time) based
             # on retries count (delay = 2s ** self.request.retries).
-            if self.request.retries == 0:
-                name = f'{self.app.main}.retry'
-            else:
-                name = f'{self.app.main}.retry.{self.request.retries}'
+            name = self.app.get_retry_exchange_name(self.request.retries)
             options['exchange'] = name
             # Set countdown for logging purposes, because delay is controlled
             # on the broker side.

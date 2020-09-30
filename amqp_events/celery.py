@@ -89,22 +89,24 @@ class EventsCelery(Celery):
     @property
     def recover_exchange_name(self) -> str:
         """ Name of recover exchange name."""
-        return f'{self.main}.recover'
+        return f'{self.main}:recover'
 
-    @property
-    def retry_exchange_name(self) -> str:
+    def get_retry_exchange_name(self, retry: int = 0) -> str:
         """
         Name of DLX for event queues and retry exchange prefix.
         Also used as retry queues prefix.
         """
-        return f"{self.main}.retry"
+        default_name = f"{self.main}:retry"
+        if not retry:
+            return default_name
+        return f"{default_name}.{retry}"
 
     @property
     def archived_exchange_name(self) -> str:
         """
         Name of exchange and queue for archived events.
         """
-        return f'{self.main}.archived'
+        return f'{self.main}:archived'
 
     def _create_task_from_handler(self, fun_or_cls: T, *, name: str,
                                   bind: bool) -> T:
@@ -196,7 +198,7 @@ class EventsCelery(Celery):
                 name=f'{self.main}.{name}',
                 bindings=bindings,
                 queue_arguments={
-                    X_DEAD_LETTER_EXCHANGE: self.retry_exchange_name,
+                    X_DEAD_LETTER_EXCHANGE: self.get_retry_exchange_name(),
                 }
             )
             queues.append(queue)
@@ -226,10 +228,7 @@ class EventsCelery(Celery):
         """
         channel = self.broker_connection().default_channel
         for retry in range(defaults.AMQP_EVENTS_MAX_RETRIES):
-            if retry:
-                name = f'{self.retry_exchange_name}.{retry}'
-            else:
-                name = self.retry_exchange_name
+            name = self.get_retry_exchange_name(retry)
             retry_exchange = Exchange(name=name, type=EXCHANGE_TYPE_FANOUT)
             retry_queue = Queue(
                 name=name,
