@@ -27,7 +27,6 @@ Configuration
 > for this event.  
 
 ```python
-
 from amqp_events.celery import events_app
 
 app = events_app(
@@ -41,6 +40,7 @@ Adding events and handlers
 --------------------------
 
 ```python
+from demo.celery import app
 
 @app.event('service_name.object_name.event_name')
 def even_number_generated(number: int):
@@ -74,9 +74,10 @@ Sending events
 
 ```python
 import random
+from demo.events import number_is_even
 
 try:
-    even_number_generated(random.randint(0, 100))
+    number_is_even(random.randint(0, 100))
 except ValueError:
     print("oops, number was odd")
 ```
