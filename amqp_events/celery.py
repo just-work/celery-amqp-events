@@ -1,6 +1,6 @@
-from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple, \
-    overload
+from typing import Any, Callable, TypeVar, Set, cast, Type, Tuple, overload
 from typing import Optional, Union
+from amqp_events.types import Protocol
 
 from celery.app.base import Celery
 from celery.app.task import Task

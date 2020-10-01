@@ -70,6 +70,7 @@ setup(
     description='Distributed event handling on top of Celery',
     install_requires=[
         'Celery',
+        'typing_extensions; python_version < "3.8.0"',
     ],
     classifiers=[
         'Development Status :: 1 - Planning',
