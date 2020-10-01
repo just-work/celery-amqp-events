@@ -93,6 +93,13 @@ class EventsCelery(Celery):
         """ Name of recover exchange name."""
         return f'{self.main}:recover'
 
+    @property
+    def archived_exchange_name(self) -> str:
+        """
+        Name of exchange and queue for archived events.
+        """
+        return f'{self.main}:archived'
+
     def get_retry_exchange_name(self, retry: int = 0) -> str:
         """
         Name of DLX for event queues and retry exchange prefix.
@@ -102,13 +109,6 @@ class EventsCelery(Celery):
         if not retry:
             return default_name
         return f"{default_name}.{retry}"
-
-    @property
-    def archived_exchange_name(self) -> str:
-        """
-        Name of exchange and queue for archived events.
-        """
-        return f'{self.main}:archived'
 
     def _create_task_from_handler(self, fun_or_cls: T, *, name: str,
                                   bind: bool) -> T:
@@ -192,6 +192,12 @@ class EventsCelery(Celery):
         else:
             recover = None
 
+        queue_arguments = None
+        if defaults.AMQP_EVENTS_MAX_RETRIES:
+            queue_arguments = {
+                X_DEAD_LETTER_EXCHANGE: self.get_retry_exchange_name(),
+            }
+
         for name in self._handlers:
             bindings = [binding(exchange=exchange, routing_key=name)]
             if recover:
@@ -199,9 +205,7 @@ class EventsCelery(Celery):
             queue = Queue(
                 name=f'{self.main}.{name}',
                 bindings=bindings,
-                queue_arguments={
-                    X_DEAD_LETTER_EXCHANGE: self.get_retry_exchange_name(),
-                }
+                queue_arguments=queue_arguments
             )
             queues.append(queue)
         self.conf.task_queues = queues

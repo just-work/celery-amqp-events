@@ -101,7 +101,8 @@ class EventsCeleryTestCase(TestCase):
     """ Checks the EventsCelery methods."""
 
     def setUp(self) -> None:
-        self.app = EventsCelery("test")
+        self.service_name = "test"
+        self.app = EventsCelery(self.service_name)
         self.app.conf.broker_url = 'in-memory:///'
         self.app.conf.task_default_exchange_type = 'topic'
         self.app.conf.task_always_eager = True
@@ -112,10 +113,16 @@ class EventsCeleryTestCase(TestCase):
             self.event_function_mock)
         self.apply_async_patcher = mock.patch('celery.canvas.Signature')
         self.apply_async_mock: mock.MagicMock = self.apply_async_patcher.start()
+        self.channel_mock = mock.MagicMock()
+        self.channel_patcher = mock.patch(
+            'amqp_events.celery.EventsCelery.broker_connection',
+            return_value=mock.MagicMock(default_channel=self.channel_mock))
+        self.channel_patcher.start()
 
     def tearDown(self) -> None:
         super().tearDown()
         self.apply_async_patcher.stop()
+        self.channel_mock.stop()
 
     @property
     def task(self):
@@ -256,6 +263,163 @@ class EventsCeleryTestCase(TestCase):
         expected = {'x-dead-letter-exchange': retry_exchange}
         self.assertDictEqual(getattr(queue, 'queue_arguments'), expected)
 
+    @override_defaults('amqp_events', AMQP_EVENTS_MAX_RETRIES=0)
+    def test_autocreate_queue_for_handler_if_broker_retry_disabled(self):
+        """
+        If broker-side retry is disabled, handler queues are created without
+        extra arguments.
+        """
+        self.app.handler(self.event_name)(self.my_handler_func)
+
+        self.app.on_after_finalize.send(self.app)
+
+        queues = self.app.conf.task_queues
+        self.assertEqual(len(queues), 1)
+        queue = queues[0]
+        self.assertIsInstance(queue, Queue)
+        self.assertEqual(queue.name, f"{self.app.main}.{self.event_name}")
+        # multiple exchange bindings
+        self.assertIsNone(queue.exchange)
+        self.assertEqual(len(queue.bindings), 1)
+
+        bindings = {b.exchange.name: b for b in queue.bindings}
+        b = bindings[self.app.conf.task_default_exchange]
+        self.assertIsInstance(b.exchange, Exchange)
+        self.assertEqual(b.exchange.type,
+                         self.app.conf.task_default_exchange_type)
+        self.assertEqual(b.routing_key, self.event_name)
+
+        self.assertIsNone(getattr(queue, 'queue_arguments'))
+
+    @override_defaults('amqp_events',
+                       AMQP_EVENTS_ARCHIVED_MESSAGE_TTL=0,
+                       AMQP_EVENTS_ARCHIVED_QUEUE_LENGTH=0)
+    def test_register_retry_queues(self):
+        """
+        Checks broker-side retry system initialization.
+
+        On start a set of exchange/queue pairs is created to make it possible
+        to have broker-side retries with different delays for exponential
+        backoff.
+        """
+        self.app.on_after_finalize.send(self.app)
+        exchange_declare_calls = []
+        queue_declare_calls = []
+        queue_bind_calls = []
+        prepare_queue_arguments_calls = []
+        args = self.channel_mock.prepare_queue_arguments.return_value
+        recover = self.app.recover_exchange_name
+        for i in range(defaults.AMQP_EVENTS_MAX_RETRIES):
+            sn = self.service_name
+            entity_name = f'{sn}:retry.{i}' if i else f'{sn}:retry'
+            exchange_declare_calls.append(
+                mock.call(
+                    exchange=entity_name,
+                    type='fanout',
+                    durable=True,
+                    arguments=None,
+                    auto_delete=False,
+                    nowait=False,
+                    passive=False
+                ),
+            )
+            queue_declare_calls.append(
+                mock.call(queue=entity_name,
+                          passive=False,
+                          durable=True,
+                          exclusive=False,
+                          auto_delete=False,
+                          arguments=args,
+                          nowait=False)
+            )
+            queue_bind_calls.append(
+                mock.call(queue=entity_name,
+                          exchange=entity_name,
+                          routing_key='',
+                          arguments=None,
+                          nowait=False)
+            )
+            prepare_queue_arguments_calls.append(
+                mock.call(
+                    {
+                        'x-message-ttl': 2 ** i * 1000,
+                        'x-dead-letter-exchange': recover,
+                    },
+                    expires=None,
+                    message_ttl=None,
+                    max_length=None,
+                    max_length_bytes=None,
+                    max_priority=None)
+            )
+        self.channel_mock.exchange_declare.assert_has_calls(
+            exchange_declare_calls)
+        self.channel_mock.queue_declare.assert_has_calls(queue_declare_calls)
+        self.channel_mock.queue_bind.assert_has_calls(queue_bind_calls)
+        self.channel_mock.prepare_queue_arguments.assert_has_calls(
+            prepare_queue_arguments_calls
+        )
+
+    @override_defaults('amqp_events',
+                       AMQP_EVENTS_MAX_RETRIES=0,
+                       AMQP_EVENTS_ARCHIVED_MESSAGE_TTL=0,
+                       AMQP_EVENTS_ARCHIVED_QUEUE_LENGTH=0)
+    def test_skip_register_retry_and_archive_queues_if_disabled(self):
+        """
+        If AMQP_EVENTS_MAX_RETRIES is set to zero, no retry queues declared.
+        If MESSAGE_TTL and QUEUE_LENGTH are set to zero, no archive queues
+        declared.
+        """
+        self.app.on_after_finalize.send(self.app)
+        self.channel_mock.exchange_declare.assert_not_called()
+        self.channel_mock.queue_declare.assert_not_called()
+        self.channel_mock.queue_bind.assert_not_called()
+
+    @override_defaults('amqp_events', AMQP_EVENTS_MAX_RETRIES=0)
+    def test_register_archived_queue(self):
+        """
+        Checks archive queue declaration.
+        """
+        self.app.on_after_finalize.send(self.app)
+        args = self.channel_mock.prepare_queue_arguments.return_value
+        entity_name = f'{self.service_name}:archived'
+        self.channel_mock.exchange_declare.assert_called_once_with(
+            exchange=entity_name,
+            type='fanout',
+            durable=True,
+            auto_delete=False,
+            arguments=None,
+            nowait=False,
+            passive=False
+        )
+        self.channel_mock.queue_declare.assert_called_once_with(
+            queue=entity_name,
+            passive=False,
+            durable=True,
+            exclusive=False,
+            auto_delete=False,
+            arguments=args,
+            nowait=False
+        )
+        self.channel_mock.queue_bind.assert_called_once_with(
+            queue=entity_name,
+            exchange=entity_name,
+            routing_key='',
+            arguments=None,
+            nowait=False
+        )
+        self.channel_mock.prepare_queue_arguments.assert_called_once_with(
+            {
+                'x-message-ttl': defaults.AMQP_EVENTS_ARCHIVED_MESSAGE_TTL,
+                'x-max-length': defaults.AMQP_EVENTS_ARCHIVED_QUEUE_LENGTH,
+                'x-queue-mode': 'lazy',
+            },
+            expires=None,
+            message_ttl=None,
+            max_length=None,
+            max_length_bytes=None,
+            max_priority=None
+        )
+
     def test_skip_queue_auto_creation_if_already_defined(self):
         """
         If `task_queues` is set up, no automatic queues are created.
@@ -277,6 +441,18 @@ class EventsCeleryTestCase(TestCase):
         decorator(self.my_handler_func)
 
         self.assertRaises(RuntimeError, decorator, mock.MagicMock())
+
+    def test_exchange_names(self):
+        """ Application correctly build related exchange names."""
+        self.assertEqual(self.app.recover_exchange_name,
+                         f'{self.service_name}:recover')
+        self.assertEqual(self.app.archived_exchange_name,
+                         f'{self.service_name}:archived')
+        self.assertEqual(self.app.get_retry_exchange_name(),
+                         f'{self.service_name}:retry')
+        n = random.randint(1, 10)
+        self.assertEqual(self.app.get_retry_exchange_name(n),
+                         f'{self.service_name}:retry.{n}')
 
 
 class HandlerTaskTestCase(TestCase):
