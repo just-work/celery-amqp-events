@@ -170,7 +170,7 @@ class EventsCeleryTestCase(TestCase):
 class HandlerTaskTestCase(TestCase):
     def setUp(self) -> None:
         self.app = celery.app
-        self.app.conf.broker_url = 'memory:///'
+        self.app.loader.import_default_modules()
         self.request = MagicMock(
             retries=0,
             called_directly=False,
