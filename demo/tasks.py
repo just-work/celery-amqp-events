@@ -12,6 +12,8 @@ def on_event_occured(self: Task,
                      countdown: Optional[int] = None) -> None:
     if value == 'retry':
         self.retry(countdown=countdown)
+    if isinstance(value, Exception):
+        raise value
 
 
 @app.handler(events.number_is_odd.name)

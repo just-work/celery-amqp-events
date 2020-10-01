@@ -279,3 +279,25 @@ class HandlerTaskTestCase(TestCase):
         self.assertIsInstance(res.result, Reject)
         self.assertFalse(res.result.requeue)
         self.assertEqual(res.result.reason, err)
+
+    def test_autoretry_for(self):
+        """
+        For an unhandled exceptions event is retried via retry exchange.
+
+        This is configured with `EventHandler.autoretry_for=(Exception,)`
+        """
+        class RetryException(Exception):
+            pass
+        self.retry_mock.return_value = RetryException()
+        exc = Exception('test error')
+
+        self.assertRaises(RetryException, self.run_task, exc)
+        args = kwargs = eta = None
+        throw = True
+        countdown = 1
+        max_retries = defaults.AMQP_EVENTS_MAX_RETRIES
+        exchange = self.app.get_retry_exchange_name(0)
+
+        self.retry_mock.assert_called_once_with(
+            args, kwargs, exc, throw, eta, countdown, max_retries,
+            exchange=exchange)
