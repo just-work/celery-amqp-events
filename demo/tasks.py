@@ -1,23 +1,23 @@
+from typing import Optional
+
 from celery.app.task import Task
-from celery.exceptions import Reject
 
 from demo import events
 from demo.celery import app
 
 
-@events.event_occured.handler
-def on_event_occured(value: str) -> None:
-    print(f"event occured: {value}")
-    if value == 'reject':
-        raise ValueError('reject')
+@events.event_occured.handler(bind=True)
+def on_event_occured(self: Task,
+                     value: str,
+                     countdown: Optional[int] = None) -> None:
+    if value == 'retry':
+        self.retry(countdown=countdown)
 
 
-@app.handler(events.number_is_odd.name, bind=True)
-def on_number_is_odd(self: Task, number: int) -> None:
-    if self.request.retries < 5:
-        # retry task once
+@app.handler(events.number_is_odd.name)
+def on_number_is_odd(number: int) -> None:
+    if number % 2 == 1:
         raise ValueError(number)
-    print(f"number {number} is odd {self.request.correlation_id}")
 
 
 @app.handler(events.number_is_even.name)

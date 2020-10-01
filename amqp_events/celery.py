@@ -1,4 +1,5 @@
-from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple
+from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple, \
+    Optional, Union
 
 from celery import Celery, Task
 from celery.canvas import Signature
@@ -285,8 +286,13 @@ class Event:
         result: AsyncResult = s.apply_async()
         return result.id
 
-    def handler(self, func: Callable) -> Callable:
-        return self.app.handler(self.name)(func)
+    def handler(self,
+                func: Optional[AnyFunc] = None,
+                bind: bool = False
+                ) -> Union[Callable[[AnyFunc], AnyFunc], AnyFunc]:
+        if func and callable(func):
+            return self.app.handler(self.name, bind=bind)(func)
+        return self.app.handler(self.name, bind=bind)
 
 
 def events_app(main: str, **kwargs: Any) -> EventsCelery:
