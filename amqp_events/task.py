@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Any, Tuple, Dict, Optional, Union
 
@@ -14,6 +15,8 @@ class EventHandler(Task):
     app: 'amqp_events.celery.EventsCelery'
     max_retries = defaults.AMQP_EVENTS_MAX_RETRIES
     autoretry_for = (Exception,)
+    retry_backoff = 1.0
+    retry_backoff_max = 2 ** defaults.AMQP_EVENTS_MAX_RETRIES
 
     # As retry queue handles message delay by itself, we don't need default
     # retry countdown.
@@ -40,7 +43,8 @@ class EventHandler(Task):
 
             # One more attempt to move message to archive queue
             max_retries += 1
-
+            # No need to wait
+            countdown = None
         else:
             # As celery uses delivery_info for retrying tasks, this can lead to
             # exponential event count growth when two different consumers retry
@@ -48,12 +52,15 @@ class EventHandler(Task):
             # Because of this we always retry message to separate retry queue
             # via separate fanout exchange with varying message-ttl.
             # We choose concrete exchange (and corresponding delay time) based
-            # on retries count (delay = 2s ** self.request.retries).
-            name = self.app.get_retry_exchange_name(self.request.retries)
-            options['exchange'] = name
-            # Set countdown for logging purposes, because delay is controlled
-            # on the broker side.
-            countdown = 2 ** self.request.retries
+            # on log(countdown)
+            if not countdown:
+                countdown = 1.0
+
+            # smallest delay is 1 second
+            retries = max(math.floor(math.log2(countdown)), 0)
+            # max delay is 2 ** max_retries
+            retries = min(retries, defaults.AMQP_EVENTS_MAX_RETRIES)
+            options['exchange'] = self.app.get_retry_exchange_name(retries)
 
         return super().retry(args, kwargs, exc, throw, eta, countdown,
                              max_retries, **options)
