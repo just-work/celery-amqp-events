@@ -4,6 +4,7 @@ from typing import Any, Tuple, Dict, Optional, Union
 
 from celery import Task
 
+import amqp_events.celery
 from amqp_events import defaults
 
 Args = Tuple[Any, ...]

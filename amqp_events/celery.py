@@ -1,4 +1,5 @@
-from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple
+from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple, \
+    overload
 from typing import Optional, Union
 
 from celery.app.base import Celery
@@ -24,6 +25,7 @@ QUEUE_MODE_LAZY = "lazy"
 
 AnyFunc = Callable[..., Any]
 F = TypeVar('F')
+Decorator = Callable[[F], F]
 # noinspection PyTypeChecker
 T = TypeVar('T', bound=AnyFunc)
 
@@ -42,7 +44,16 @@ class EventProtocol(Protocol[T]):
 
     __call__: T
 
-    def handler(self, func: F) -> F: ...
+    @overload
+    def handler(self, *, bind: bool = False) -> Decorator:
+        ...
+
+    @overload
+    def handler(self, func: F) -> F:
+        ...
+
+    def handler(self, func: F = None, *, bind: bool = False
+                ) -> Union[Decorator, F]: ...
 
 
 class EventsCelery(Celery):
@@ -247,7 +258,7 @@ class EventsCelery(Celery):
             retry_queue.declare(channel=channel)
             retry_queue.maybe_bind(channel=channel)
 
-    def _register_archived_queue(self, **_) -> None:
+    def _register_archived_queue(self, **_: Any) -> None:
         """
         Registers an exchange and a queue for archived messages.
         """
