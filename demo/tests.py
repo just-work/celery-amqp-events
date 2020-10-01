@@ -31,20 +31,122 @@ def disable_patcher(name: str):
     return decorator
 
 
+# noinspection PyPep8Naming
+class override_defaults:
+    """ Allows to easily patch `defaults` package in any module."""
+
+    def __init__(self, module_name, **new_values):
+        super().__init__()
+        self.patchers = []
+        self.module_name = module_name
+        self.new_values = new_values
+
+    def enable(self):
+        for k, v in self.new_values.items():
+            p = mock.patch(f'{self.module_name}.defaults.{k}',
+                           new_callable=mock.PropertyMock(return_value=v))
+            p.start()
+            self.patchers.append(p)
+
+    def disable(self):
+        for p in self.patchers:
+            p.stop()
+        self.patchers.clear()
+
+    def __enter__(self):
+        return self.enable()
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.disable()
+
+    def decorate_class(self, cls):
+        if issubclass(cls, TestCase):
+            decorated_setUp = cls.setUp
+            decorated_tearDown = cls.tearDown
+
+            def setUp(inner_self):
+                self.enable()
+                try:
+                    decorated_setUp(inner_self)
+                except Exception:
+                    self.disable()
+                    raise
+
+            def tearDown(inner_self):
+                decorated_tearDown(inner_self)
+                self.disable()
+
+            cls.setUp = setUp
+            cls.tearDown = tearDown
+            return cls
+        raise TypeError('Can only decorate subclasses of unittest.TestCase')
+
+    def decorate_callable(self, func):
+        @wraps(func)
+        def inner(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+
+        return inner
+
+    def __call__(self, decorated):
+        if isinstance(decorated, type):
+            return self.decorate_class(decorated)
+        elif callable(decorated):
+            return self.decorate_callable(decorated)
+        raise TypeError('Cannot decorate object of type %s' % type(decorated))
+
+
 class EventsCeleryTestCase(TestCase):
     """ Checks the EventsCelery methods."""
 
     def setUp(self) -> None:
         self.app = EventsCelery("test")
         self.app.conf.broker_url = 'in-memory:///'
+        self.app.conf.task_default_exchange_type = 'topic'
         self.app.conf.task_always_eager = True
         self.my_handler_func = mock.MagicMock(__name__='my_handler_func')
         self.event_name = f'my.event.{random.randint(1, 100000000)}'
-        self.my_event = self.app.event(self.event_name)(lambda *a, **kw: None)
+        self.event_function_mock = mock.MagicMock()
+        self.my_event = self.app.event(self.event_name)(
+            self.event_function_mock)
+        self.apply_async_patcher = mock.patch('celery.canvas.Signature')
+        self.apply_async_mock: mock.MagicMock = self.apply_async_patcher.start()
+
+    def tearDown(self) -> None:
+        super().tearDown()
+        self.apply_async_patcher.stop()
 
     @property
     def task(self):
         return self.app.tasks[self.my_event.name]
+
+    def test_send_event(self):
+        """
+        Event is sent to broker via event function call.
+        """
+        self.my_event('arg', kw='arg')
+
+        self.event_function_mock.assert_called_once_with(
+            'arg', kw='arg')
+        self.apply_async_mock.assert_called_once_with(
+            args=('arg',),
+            kwargs={'kw': 'arg'},
+            task=self.event_name,
+            app=self.app,
+            task_type=self.app.Task,
+            routing_key=self.event_name)
+        self.apply_async_mock.return_value.apply_async.assert_called_once_with()
+
+    def test_event_validation(self):
+        """
+        Event function body is called before event is sent to a broker.
+
+        This is useful for validation purposes.
+        """
+        self.event_function_mock.side_effect = Exception("test error")
+        self.assertRaises(Exception, self.my_event)
+        self.apply_async_mock.assert_not_called()
 
     def test_register_handler_function(self):
         """
@@ -137,12 +239,22 @@ class EventsCeleryTestCase(TestCase):
         queue = queues[0]
         self.assertIsInstance(queue, Queue)
         self.assertEqual(queue.name, f"{self.app.main}.{self.event_name}")
-        self.assertIsInstance(queue.exchange, Exchange)
-        self.assertEqual(queue.exchange.name,
-                         self.app.conf.task_default_exchange)
-        self.assertEqual(queue.exchange.type,
-                         self.app.conf.task_default_exchange_type)
-        self.assertEqual(queue.routing_key, self.event_name)
+        # multiple exchange bindings
+        self.assertIsNone(queue.exchange)
+        self.assertEqual(len(queue.bindings), 2)
+
+        bindings = {b.exchange.name: b for b in queue.bindings}
+        b0 = bindings[self.app.conf.task_default_exchange]
+        b1 = bindings[self.app.recover_exchange_name]
+        for b in b0, b1:
+            self.assertIsInstance(b.exchange, Exchange)
+            self.assertEqual(b.exchange.type,
+                             self.app.conf.task_default_exchange_type)
+            self.assertEqual(b.routing_key, self.event_name)
+
+        retry_exchange = self.app.get_retry_exchange_name()
+        expected = {'x-dead-letter-exchange': retry_exchange}
+        self.assertDictEqual(getattr(queue, 'queue_arguments'), expected)
 
     def test_skip_queue_auto_creation_if_already_defined(self):
         """
@@ -286,8 +398,10 @@ class HandlerTaskTestCase(TestCase):
 
         This is configured with `EventHandler.autoretry_for=(Exception,)`
         """
+
         class RetryException(Exception):
             pass
+
         self.retry_mock.return_value = RetryException()
         exc = Exception('test error')
 

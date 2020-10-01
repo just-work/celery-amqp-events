@@ -1,8 +1,9 @@
-from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple, \
-    Optional, Union
+from typing import Any, Callable, TypeVar, Protocol, Set, cast, Type, Tuple
+from typing import Optional, Union
 
-from celery import Celery, Task
-from celery.canvas import Signature
+from celery.app.base import Celery
+from celery.app.task import Task
+from celery import canvas
 from celery.result import AsyncResult
 from kombu import Exchange, Queue, binding
 
@@ -276,7 +277,7 @@ class Event:
 
     def __call__(self, *args: Any, **kwargs: Any) -> str:
         self.func(*args, **kwargs)
-        s = Signature(
+        s = canvas.Signature(
             args=args,
             kwargs=kwargs,
             task=self.name,

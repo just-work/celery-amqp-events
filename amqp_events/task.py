@@ -22,7 +22,7 @@ class EventHandler(Task):
     # retry countdown.
     default_retry_delay = 0
 
-    def run(self, *args: Any, **kwargs: Any) -> None:
+    def run(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
         raise NotImplementedError
 
     def retry(self,
