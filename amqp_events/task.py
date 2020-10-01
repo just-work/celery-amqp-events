@@ -1,11 +1,10 @@
+import math
 from datetime import datetime
 from typing import Any, Tuple, Dict, Optional, Union
 
-from billiard.einfo import ExceptionInfo
 from celery import Task
 
-from celery.exceptions import Reject
-
+import amqp_events.celery
 from amqp_events import defaults
 
 Args = Tuple[Any, ...]
@@ -13,18 +12,19 @@ Kwargs = Dict[str, Any]
 
 
 class EventHandler(Task):
+    # noinspection PyUnresolvedReferences
+    app: 'amqp_events.celery.EventsCelery'
     max_retries = defaults.AMQP_EVENTS_MAX_RETRIES
+    autoretry_for = (Exception,)
+    retry_backoff = 1.0
+    retry_backoff_max = 2 ** defaults.AMQP_EVENTS_MAX_RETRIES
 
     # As retry queue handles message delay by itself, we don't need default
     # retry countdown.
     default_retry_delay = 0
 
-    def run(self, *args: Any, **kwargs: Any) -> None:
+    def run(self, *args: Any, **kwargs: Any) -> None:  # pragma: no cover
         raise NotImplementedError
-
-    def on_failure(self, exc: Exception, task_id: str, args: Args,
-                   kwargs: Kwargs, einfo: ExceptionInfo) -> None:
-        self.retry(exc=exc, throw=False)
 
     def retry(self,
               args: Optional[Args] = None,
@@ -40,26 +40,28 @@ class EventHandler(Task):
         if max_retries is not None and self.request.retries >= max_retries:
             # When no attempts left we retry message to separate archive queue
             # where it can be found for some time before expiration.
-            options['routing_key'] = f'{self.name}.archived'
+            options['exchange'] = self.app.archived_exchange_name
 
             # One more attempt to move message to archive queue
             max_retries += 1
-
+            # No need to wait
+            countdown = None
         else:
             # As celery uses delivery_info for retrying tasks, this can lead to
             # exponential event count growth when two different consumers retry
             # same task with same shared routing key.
-            # Because of this we always retry message to separate retry queue.
-            options['routing_key'] = f'{self.name}.retry'
+            # Because of this we always retry message to separate retry queue
+            # via separate fanout exchange with varying message-ttl.
+            # We choose concrete exchange (and corresponding delay time) based
+            # on log(countdown)
+            if not countdown:
+                countdown = 1.0
 
-            # Use message expiration to delay processing via DLX
-            options['expiration'] = 2 ** self.request.retries
+            # smallest delay is 1 second
+            retries = max(math.floor(math.log2(countdown)), 0)
+            # max delay is 2 ** max_retries
+            retries = min(retries, defaults.AMQP_EVENTS_MAX_RETRIES)
+            options['exchange'] = self.app.get_retry_exchange_name(retries)
 
-        try:
-            return super().retry(args, kwargs, exc, throw, eta, countdown,
-                                 max_retries, **options)
-        except Reject as reject:
-            # If any error happens when publish retried message, we want to
-            # requeue current task back to incoming queue.
-            reject.requeue = True
-            raise
+        return super().retry(args, kwargs, exc, throw, eta, countdown,
+                             max_retries, **options)
