@@ -106,7 +106,8 @@ class EventsCeleryTestCase(TestCase):
         self.app.conf.broker_url = 'in-memory:///'
         self.app.conf.task_default_exchange_type = 'topic'
         self.app.conf.task_always_eager = True
-        self.my_handler_func = mock.MagicMock(__name__='my_handler_func')
+        self.my_handler_func = mock.MagicMock(__name__='my_handler_func',
+                                              __annotations__={})
         self.event_name = f'my.event.{random.randint(1, 100000000)}'
         self.event_function_mock = mock.MagicMock()
         self.my_event = self.app.event(self.event_name)(
