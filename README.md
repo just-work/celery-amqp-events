@@ -31,7 +31,7 @@ from amqp_events.celery import events_app
 
 app = events_app(
     "service_name",  # important in multi-service environment
-    imports=['demo.tasks']  # modules where to find event handlers
+    imports=['demo.tasks'],  # modules where to find event handlers
     broker_url='amqp://guest:guest@rabbitmq:5672/',
 )
 ```
@@ -97,7 +97,7 @@ Robustness
     * using `countdown` forces consumer to keep "unacknowledged" events in 
       memory, which is bad for load balancing and resource usage.
     * retrying to same queue will slow down event processing if retry 
-      probability is high enougth
+      probability is high enough
     * two faulty consumers retrying same event with **same routing key** will
       cause exponential growth of message count in RabbitMQ because message is 
       split to multiple messages when published from same exchange to multiple 
