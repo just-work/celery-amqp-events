@@ -19,7 +19,7 @@ class EventHandler(Task):
     retry_backoff = 1.0
     retry_backoff_max = 2 ** defaults.AMQP_EVENTS_MAX_RETRIES
 
-    # As retry queue handles message delay by itself, we don't need default
+    # As retry queue handles message delay by itself, we don't need the default
     # retry countdown.
     default_retry_delay = 0
 

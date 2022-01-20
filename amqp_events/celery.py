@@ -84,6 +84,7 @@ class EventsCelery(Celery):
     def handler(self, name: str, bind: bool = False) -> Callable[[T], T]:
         """
         Decorates a function or a class as a handler for an event.
+
         :param name: event name
         :param bind: flag to pass Celery.Task instance to a function
             (see `Celery.task(bind=True)`).
@@ -147,7 +148,7 @@ class EventsCelery(Celery):
         :param handler: handler class
         :param name: event name
         :return: new task class that inherits `task_class` and `self.Task`
-            and has `name` attribute set to event name
+            and has `name` attribute set to event's name
         """
         if self.Task in handler.__bases__:
             bases: Tuple[Type[Task], ...] = (handler,)
@@ -162,12 +163,12 @@ class EventsCelery(Celery):
         """
         Create a list of queues for celery worker from registered handlers list.
 
-        Each handler has it's own queue named as `service_name.event_name`.
+        Each handler has its own queue named as `service_name.event_name`.
         This queue is bound to `events` exchange with event routing key and
         receives initial events from it. If broker-side retry is enabled, queue
         is also bound to `recover` exchange with same routing key, from which
         it receives retried events.
-        Also `recover` defines `dead-letter-exchange` which re-routes rejected
+        Also, `recover` defines `dead-letter-exchange` which re-routes rejected
         messages to `retry` queue with 1 second duration (in case of failed
         republish).
 
